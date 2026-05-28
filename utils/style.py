@@ -34,12 +34,36 @@ def apply_style():
         padding: 1.35rem 1.75rem 3rem;
     }
 
-    [data-testid="stHeader"],
     [data-testid="stToolbar"],
     #MainMenu,
     footer {
         visibility: hidden;
         height: 0;
+    }
+
+    [data-testid="stHeader"] {
+        visibility: visible !important;
+        height: 3rem !important;
+        background: rgba(245, 247, 250, .92) !important;
+        backdrop-filter: blur(10px);
+        border-bottom: 1px solid rgba(228, 231, 236, .8);
+    }
+
+    [data-testid="collapsedControl"] {
+        visibility: visible !important;
+        display: flex !important;
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        z-index: 999999 !important;
+    }
+
+    [data-testid="collapsedControl"] button,
+    [data-testid="stSidebarCollapseButton"] button {
+        color: var(--text) !important;
+        background: #FFFFFF !important;
+        border: 1px solid var(--border) !important;
+        border-radius: var(--radius) !important;
+        box-shadow: var(--shadow-soft) !important;
     }
 
     .stApp,

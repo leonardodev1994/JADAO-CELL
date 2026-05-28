@@ -31,6 +31,7 @@ st.set_page_config(
     page_title="Jadão Cell",
     page_icon=Image.open(LOGO_PATH) if LOGO_PATH.exists() else None,
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
 apply_style()
