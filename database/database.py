@@ -1,4 +1,6 @@
 import sqlite3
+from pathlib import Path
+import os
 
 
 class DatabaseConfigError(RuntimeError):
@@ -23,6 +25,14 @@ def get_streamlit_secret(name, required=False):
 
 def _get_database_url():
     return get_streamlit_secret("DATABASE_URL")
+
+
+def is_streamlit_cloud():
+    return (
+        os.getenv("STREAMLIT_CLOUD") == "1"
+        or os.getenv("STREAMLIT_SHARING_MODE") is not None
+        or Path("/mount/src").exists()
+    )
 
 
 def is_database_url_configured():
@@ -107,6 +117,13 @@ def init_db(db_path="banco.db"):
                 "Confira se o Secret DATABASE_URL está configurado corretamente no Streamlit Cloud "
                 "e se a senha/host/porta do Supabase estão válidos."
             ) from error
+
+    if is_streamlit_cloud():
+        raise DatabaseConfigError(
+            "DATABASE_URL não foi encontrado nos Secrets do Streamlit Cloud. "
+            "Por segurança, o sistema online não usa SQLite local. "
+            "Configure DATABASE_URL em App > Settings > Secrets e reinicie o app."
+        )
 
     conn = sqlite3.connect(db_path, check_same_thread=False)
     cursor = conn.cursor()

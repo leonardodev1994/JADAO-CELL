@@ -7,7 +7,6 @@ from database.database import (
     database_mode_label,
     init_db,
     is_database_url_configured,
-    is_supabase_project_configured,
 )
 from utils.backup import run_daily_auto_backup
 from views.caixa_diario import render_caixa_diario
@@ -40,7 +39,7 @@ try:
     conn = init_db()
 except DatabaseConfigError as error:
     st.error(str(error))
-    st.info("No Streamlit Cloud, configure o Secret DATABASE_URL em App > Settings > Secrets e reinicie o app.")
+    st.info("Cadastre o Secret DATABASE_URL no Streamlit Cloud em App > Settings > Secrets e reinicie o app.")
     st.stop()
 
 if not require_login(conn):
@@ -116,11 +115,7 @@ def render_mobile_navigation(user, auto_backup):
                 st.success(f"Backup automático criado: {auto_backup.name}")
             st.caption(f"Banco: {database_mode_label()}")
             if not is_database_url_configured():
-                st.warning(
-                    "Sem DATABASE_URL. O app está usando SQLite local, indicado apenas para testes locais."
-                )
-            elif not is_supabase_project_configured():
-                st.caption("Supabase conectado pelo DATABASE_URL. SUPABASE_URL/SUPABASE_KEY não são usados pelo app atual.")
+                st.caption("Modo local de desenvolvimento com SQLite.")
             st.radio(
                 "Ir para:",
                 list(MENU_ITEMS.keys()),
@@ -161,11 +156,7 @@ def render_sidebar_navigation(user, auto_backup):
 
     st.sidebar.caption(f"Banco: {database_mode_label()}")
     if not is_database_url_configured():
-        st.sidebar.warning(
-            "Sem DATABASE_URL. O app está usando SQLite local, indicado apenas para testes locais."
-        )
-    elif not is_supabase_project_configured():
-        st.sidebar.caption("Supabase conectado pelo DATABASE_URL. SUPABASE_URL/SUPABASE_KEY não são usados pelo app atual.")
+        st.sidebar.caption("Modo local de desenvolvimento com SQLite.")
 
     st.sidebar.markdown('<div class="nav-caption">Navegação</div>', unsafe_allow_html=True)
     for group_name, group_items in MENU_GROUPS.items():
