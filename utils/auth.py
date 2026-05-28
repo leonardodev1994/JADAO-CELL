@@ -34,30 +34,51 @@ def verify_password(password, salt, password_hash):
 
 def ensure_default_admin(conn):
     cursor = conn.cursor()
-    total_users = cursor.execute("SELECT COUNT(*) FROM usuarios").fetchone()[0]
+    existing_admin = cursor.execute(
+        "SELECT id FROM usuarios WHERE usuario = ? LIMIT 1",
+        (DEFAULT_ADMIN_USER,),
+    ).fetchone()
 
-    if total_users > 0:
+    if existing_admin:
         return
 
     salt, password_hash = hash_password(DEFAULT_ADMIN_PASSWORD)
-    cursor.execute("""
-    INSERT INTO usuarios (
-        nome,
-        usuario,
-        senha_hash,
-        senha_salt,
-        perfil,
-        ativo
-    )
-    VALUES (?, ?, ?, ?, ?, ?)
-    """, (
+
+    params = (
         "Administrador",
         DEFAULT_ADMIN_USER,
         password_hash,
         salt,
         "Admin",
         1,
-    ))
+    )
+
+    if getattr(conn, "backend", "sqlite") == "postgres":
+        cursor.execute("""
+        INSERT INTO usuarios (
+            nome,
+            usuario,
+            senha_hash,
+            senha_salt,
+            perfil,
+            ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT (usuario) DO NOTHING
+        """, params)
+    else:
+        cursor.execute("""
+        INSERT OR IGNORE INTO usuarios (
+            nome,
+            usuario,
+            senha_hash,
+            senha_salt,
+            perfil,
+            ativo
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        """, params)
+
     conn.commit()
 
 
