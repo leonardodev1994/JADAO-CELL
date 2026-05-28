@@ -1,0 +1,25 @@
+.venv/
+.venv-1/
+venv/
+env/
+__pycache__/
+**/__pycache__/
+*.pyc
+__MACOSX/
+.env
+.env.*
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# Dados locais/sensíveis
+banco.db
+*.db
+*.sqlite
+*.sqlite3
+backups/
+uploads/
+tools/rclone
+
+# Sistema operacional
+.DS_Store
