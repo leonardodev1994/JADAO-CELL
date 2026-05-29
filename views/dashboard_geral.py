@@ -1,25 +1,50 @@
-import pandas as pd
 import streamlit as st
 
+from utils.db_queries import cached_read_sql
 from utils.dashboard_ui import bar_chart, empty_state, metric_card, moeda, page_header, pie_chart
 
 
 def render_dashboard_geral(conn):
-    df = pd.read_sql_query("SELECT * FROM lancamentos", conn)
-    df_pagamentos = pd.read_sql_query("SELECT * FROM pagamentos", conn)
-    df_despesas = pd.read_sql_query("SELECT * FROM despesas", conn)
+    resumo = cached_read_sql(conn, """
+    SELECT
+        COALESCE(SUM(valor), 0) AS faturamento,
+        COALESCE(SUM(CASE WHEN tipo = 'Serviço' THEN valor ELSE 0 END), 0) AS servicos,
+        COALESCE(SUM(CASE WHEN tipo = 'Produto' THEN valor ELSE 0 END), 0) AS produtos,
+        COUNT(*) AS quantidade
+    FROM lancamentos
+    """).iloc[0]
+    despesas_df = cached_read_sql(conn, "SELECT COALESCE(SUM(valor), 0) AS total FROM despesas")
+    resumo_pag = cached_read_sql(conn, """
+    SELECT forma_pagamento, COALESCE(SUM(valor), 0) AS valor
+    FROM pagamentos
+    GROUP BY forma_pagamento
+    ORDER BY valor DESC
+    """)
+    resumo_tipo = cached_read_sql(conn, """
+    SELECT tipo, COALESCE(SUM(valor), 0) AS valor
+    FROM lancamentos
+    GROUP BY tipo
+    ORDER BY valor DESC
+    """)
+    top = cached_read_sql(conn, """
+    SELECT descricao, COALESCE(SUM(valor), 0) AS valor, COUNT(id) AS quantidade
+    FROM lancamentos
+    GROUP BY descricao
+    ORDER BY valor DESC
+    LIMIT 8
+    """)
 
     page_header(
         "Dashboard Geral",
         "Visão consolidada do faturamento, mix de vendas e formas de pagamento.",
     )
 
-    faturamento = df["valor"].sum() if not df.empty else 0
-    despesas = df_despesas["valor"].sum() if not df_despesas.empty else 0
+    faturamento = resumo["faturamento"]
+    despesas = despesas_df.iloc[0]["total"] if not despesas_df.empty else 0
     lucro = faturamento - despesas
-
-    servicos = df[df["tipo"] == "Serviço"]["valor"].sum() if not df.empty else 0
-    produtos = df[df["tipo"] == "Produto"]["valor"].sum() if not df.empty else 0
+    servicos = resumo["servicos"]
+    produtos = resumo["produtos"]
+    quantidade = int(resumo["quantidade"] or 0)
 
     c1, c2, c3, c4 = st.columns(4)
     with c1:
@@ -36,33 +61,25 @@ def render_dashboard_geral(conn):
     col1, col2 = st.columns(2)
 
     with col1:
-        if df_pagamentos.empty:
+        if resumo_pag.empty:
             empty_state("Nenhum pagamento cadastrado ainda.")
         else:
-            resumo_pag = df_pagamentos.groupby("forma_pagamento", as_index=False)["valor"].sum()
             st.plotly_chart(
                 pie_chart(resumo_pag, "forma_pagamento", "valor", "Formas de pagamento"),
                 width="stretch",
             )
 
     with col2:
-        if df.empty:
+        if resumo_tipo.empty:
             empty_state("Nenhum lançamento cadastrado ainda.")
         else:
-            resumo = df.groupby("tipo", as_index=False)["valor"].sum()
             st.plotly_chart(
-                bar_chart(resumo, "tipo", "valor", "Serviços x Produtos"),
+                bar_chart(resumo_tipo, "tipo", "valor", "Serviços x Produtos"),
                 width="stretch",
             )
 
-    if not df.empty:
+    if quantidade:
         st.divider()
-        top = (
-            df.groupby("descricao", as_index=False)
-            .agg(valor=("valor", "sum"), quantidade=("id", "count"))
-            .sort_values("valor", ascending=False)
-            .head(8)
-        )
         st.subheader("Itens mais relevantes")
         st.dataframe(
             top.rename(columns={

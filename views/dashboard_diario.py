@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import pandas as pd
 import streamlit as st
 
+from utils.db_queries import cached_read_sql
 from utils.dashboard_ui import (
     bar_chart,
     empty_state,
@@ -21,7 +22,7 @@ def _moeda(valor):
 
 
 def _pagamentos_do_dia(conn, data):
-    return pd.read_sql_query("""
+    return cached_read_sql(conn, """
     SELECT
         pagamentos.id,
         pagamentos.lancamento_id,
@@ -33,7 +34,7 @@ def _pagamentos_do_dia(conn, data):
     FROM pagamentos
     INNER JOIN lancamentos ON lancamentos.id = pagamentos.lancamento_id
     WHERE lancamentos.data = ?
-    """, conn, params=(data,))
+    """, (data,))
 
 
 def _formatar_pagamentos_lancamento(grupo):
@@ -142,17 +143,21 @@ def _render_pagamentos_por_tipo(df_pagamentos, tipo, titulo):
         empty_state(f"Nenhum pagamento de {tipo.lower()} no dia selecionado.")
 
 
-def _safe_date_range(df):
-    if df.empty:
-        hoje = datetime.today().date()
+def _safe_date_range(conn):
+    hoje = datetime.today().date()
+    bounds = cached_read_sql(conn, """
+    SELECT MIN(data) AS min_data, MAX(data) AS max_data
+    FROM lancamentos
+    """)
+    if bounds.empty or not bounds.iloc[0]["min_data"]:
         return hoje, hoje
 
-    datas = pd.to_datetime(df["data"], errors="coerce").dropna()
-    if datas.empty:
-        hoje = datetime.today().date()
+    min_date = pd.to_datetime(bounds.iloc[0]["min_data"], errors="coerce")
+    max_date = pd.to_datetime(bounds.iloc[0]["max_data"], errors="coerce")
+    if pd.isna(min_date) or pd.isna(max_date):
         return hoje, hoje
 
-    return datas.min().date(), datas.max().date()
+    return min_date.date(), max(max_date.date(), hoje)
 
 
 def _resumo_top_itens(df_dia):
@@ -199,10 +204,7 @@ def _render_tabela_operacional(df_lancamentos, df_pagamentos, tipo, titulo, acce
 
 
 def render_dashboard_diario(conn):
-    df = pd.read_sql_query("SELECT * FROM lancamentos", conn)
-    df_despesas = pd.read_sql_query("SELECT * FROM despesas", conn)
-
-    min_date, max_date = _safe_date_range(df)
+    min_date, max_date = _safe_date_range(conn)
     selected_date = st.date_input(
         "Escolha o dia da análise",
         value=max_date,
@@ -217,16 +219,43 @@ def render_dashboard_diario(conn):
         f"Análise operacional de {selected_date.strftime('%d/%m/%Y')}",
     )
 
+    resumo = cached_read_sql(conn, """
+    SELECT
+        COALESCE(SUM(CASE WHEN data = ? THEN valor ELSE 0 END), 0) AS total,
+        COALESCE(SUM(CASE WHEN data = ? THEN valor ELSE 0 END), 0) AS total_anterior,
+        COALESCE(SUM(CASE WHEN data = ? AND tipo = 'Serviço' THEN valor ELSE 0 END), 0) AS servicos,
+        COALESCE(SUM(CASE WHEN data = ? AND tipo = 'Produto' THEN valor ELSE 0 END), 0) AS produtos,
+        COUNT(CASE WHEN data = ? AND tipo = 'Serviço' THEN 1 END) AS qtd_servicos,
+        COUNT(CASE WHEN data = ? AND tipo = 'Produto' THEN 1 END) AS qtd_produtos
+    FROM lancamentos
+    WHERE data IN (?, ?)
+    """, (data_filtro, data_anterior, data_filtro, data_filtro, data_filtro, data_filtro, data_filtro, data_anterior)).iloc[0]
+    despesas_df = cached_read_sql(conn, """
+    SELECT COALESCE(SUM(valor), 0) AS total
+    FROM despesas
+    WHERE data = ?
+    """, (data_filtro,))
     df_pagamentos = _pagamentos_do_dia(conn, data_filtro)
-    df_dia = df[df["data"] == data_filtro] if not df.empty else df
-    df_anterior = df[df["data"] == data_anterior] if not df.empty else df
-    df_despesas_dia = df_despesas[df_despesas["data"] == data_filtro] if not df_despesas.empty else df_despesas
+    df_dia = cached_read_sql(conn, """
+    SELECT id, data, tipo, descricao, valor
+    FROM lancamentos
+    WHERE data = ?
+    ORDER BY tipo, descricao
+    """, (data_filtro,))
+    top_itens = cached_read_sql(conn, """
+    SELECT descricao, COALESCE(SUM(valor), 0) AS valor, COUNT(id) AS quantidade
+    FROM lancamentos
+    WHERE data = ?
+    GROUP BY descricao
+    ORDER BY valor DESC
+    LIMIT 8
+    """, (data_filtro,))
 
-    total = df_dia["valor"].sum() if not df_dia.empty else 0
-    total_anterior = df_anterior["valor"].sum() if not df_anterior.empty else 0
-    servicos = df_dia[df_dia["tipo"] == "Serviço"]["valor"].sum() if not df_dia.empty else 0
-    produtos = df_dia[df_dia["tipo"] == "Produto"]["valor"].sum() if not df_dia.empty else 0
-    despesas = df_despesas_dia["valor"].sum() if not df_despesas_dia.empty else 0
+    total = resumo["total"]
+    total_anterior = resumo["total_anterior"]
+    servicos = resumo["servicos"]
+    produtos = resumo["produtos"]
+    despesas = despesas_df.iloc[0]["total"] if not despesas_df.empty else 0
     lucro = total - despesas
     diferenca = total - total_anterior
     diferenca_label = f"{_moeda(diferenca)} vs. dia anterior"
@@ -243,9 +272,9 @@ def render_dashboard_diario(conn):
     with c1:
         metric_card("Faturamento", _moeda(total), diferenca_label, "#5B8DEF")
     with c2:
-        metric_card("Serviços", _moeda(servicos), f"{len(df_dia[df_dia['tipo'] == 'Serviço']) if not df_dia.empty else 0} lançamentos", "#18C29C")
+        metric_card("Serviços", _moeda(servicos), f"{int(resumo['qtd_servicos'] or 0)} lançamentos", "#18C29C")
     with c3:
-        metric_card("Produtos", _moeda(produtos), f"{len(df_dia[df_dia['tipo'] == 'Produto']) if not df_dia.empty else 0} vendas", "#F59E0B")
+        metric_card("Produtos", _moeda(produtos), f"{int(resumo['qtd_produtos'] or 0)} vendas", "#F59E0B")
     with c4:
         metric_card("Lucro estimado", _moeda(lucro), f"Despesas: {_moeda(despesas)}", "#EF4444")
 
@@ -276,7 +305,6 @@ def render_dashboard_diario(conn):
                 width="stretch",
             )
     with col2:
-        top_itens = _resumo_top_itens(df_dia)
         if top_itens.empty:
             empty_state("Sem itens para ranking nesse dia.")
         else:

@@ -4,20 +4,25 @@ from datetime import timedelta
 import pandas as pd
 import streamlit as st
 
+from utils.db_queries import cached_read_sql
 from utils.dashboard_ui import bar_chart, empty_state, metric_card, moeda, page_header, pie_chart
 
 
-def _date_bounds(df):
+def _date_bounds(conn):
     hoje = datetime.today().date()
-
-    if df.empty:
+    bounds = cached_read_sql(conn, """
+    SELECT MIN(data) AS min_data, MAX(data) AS max_data
+    FROM lancamentos
+    """)
+    if bounds.empty or not bounds.iloc[0]["min_data"]:
         return hoje.replace(day=1), hoje
 
-    datas = pd.to_datetime(df["data"], errors="coerce").dropna()
-    if datas.empty:
+    min_date = pd.to_datetime(bounds.iloc[0]["min_data"], errors="coerce")
+    max_date = pd.to_datetime(bounds.iloc[0]["max_data"], errors="coerce")
+    if pd.isna(min_date) or pd.isna(max_date):
         return hoje.replace(day=1), hoje
 
-    return datas.min().date(), max(datas.max().date(), hoje)
+    return min_date.date(), max(max_date.date(), hoje)
 
 
 def _month_start(date_value):
@@ -35,10 +40,7 @@ def _period_label(start, end):
 
 
 def render_dashboard_mensal(conn):
-    df = pd.read_sql_query("SELECT * FROM lancamentos", conn)
-    df_despesas = pd.read_sql_query("SELECT * FROM despesas", conn)
-
-    min_date, max_date = _date_bounds(df)
+    min_date, max_date = _date_bounds(conn)
 
     modo = st.segmented_control(
         "Tipo de análise",
@@ -71,30 +73,33 @@ def render_dashboard_mensal(conn):
         f"Visão financeira e comercial: {_period_label(start_date, end_date)}",
     )
 
-    if df.empty:
+    start_sql = start_date.strftime("%Y-%m-%d")
+    end_sql = end_date.strftime("%Y-%m-%d")
+    resumo = cached_read_sql(conn, """
+    SELECT
+        COUNT(*) AS quantidade,
+        COALESCE(SUM(valor), 0) AS faturamento,
+        COALESCE(SUM(CASE WHEN tipo = 'Serviço' THEN valor ELSE 0 END), 0) AS servicos,
+        COALESCE(SUM(CASE WHEN tipo = 'Produto' THEN valor ELSE 0 END), 0) AS produtos
+    FROM lancamentos
+    WHERE data BETWEEN ? AND ?
+    """, (start_sql, end_sql)).iloc[0]
+
+    if not int(resumo["quantidade"] or 0):
         empty_state("Nenhum lançamento cadastrado ainda.")
         return
 
-    df["data_dt"] = pd.to_datetime(df["data"], errors="coerce")
-    df_periodo = df[
-        (df["data_dt"].dt.date >= start_date)
-        & (df["data_dt"].dt.date <= end_date)
-    ].copy()
+    despesas_df = cached_read_sql(conn, """
+    SELECT COALESCE(SUM(valor), 0) AS total
+    FROM despesas
+    WHERE data BETWEEN ? AND ?
+    """, (start_sql, end_sql))
 
-    if not df_despesas.empty:
-        df_despesas["data_dt"] = pd.to_datetime(df_despesas["data"], errors="coerce")
-        df_despesas_periodo = df_despesas[
-            (df_despesas["data_dt"].dt.date >= start_date)
-            & (df_despesas["data_dt"].dt.date <= end_date)
-        ]
-    else:
-        df_despesas_periodo = df_despesas
-
-    faturamento = df_periodo["valor"].sum() if not df_periodo.empty else 0
-    despesas = df_despesas_periodo["valor"].sum() if not df_despesas_periodo.empty else 0
+    faturamento = resumo["faturamento"]
+    despesas = despesas_df.iloc[0]["total"] if not despesas_df.empty else 0
     lucro = faturamento - despesas
-    servicos = df_periodo[df_periodo["tipo"] == "Serviço"]["valor"].sum() if not df_periodo.empty else 0
-    produtos = df_periodo[df_periodo["tipo"] == "Produto"]["valor"].sum() if not df_periodo.empty else 0
+    servicos = resumo["servicos"]
+    produtos = resumo["produtos"]
 
     dias_periodo = max((end_date - start_date).days + 1, 1)
     media_dia = faturamento / dias_periodo
@@ -112,19 +117,30 @@ def render_dashboard_mensal(conn):
 
     st.divider()
 
-    if df_periodo.empty:
-        empty_state("Nenhum lançamento no período selecionado.")
-        return
-
-    df_periodo["dia"] = df_periodo["data_dt"].dt.strftime("%d/%m")
-    diario = df_periodo.groupby("dia", as_index=False)["valor"].sum()
-    tipo = df_periodo.groupby("tipo", as_index=False)["valor"].sum()
-    top = (
-        df_periodo.groupby("descricao", as_index=False)
-        .agg(valor=("valor", "sum"), quantidade=("id", "count"))
-        .sort_values("valor", ascending=False)
-        .head(10)
-    )
+    diario = cached_read_sql(conn, """
+    SELECT data AS dia, COALESCE(SUM(valor), 0) AS valor
+    FROM lancamentos
+    WHERE data BETWEEN ? AND ?
+    GROUP BY data
+    ORDER BY data
+    """, (start_sql, end_sql))
+    if not diario.empty:
+        diario["dia"] = pd.to_datetime(diario["dia"], errors="coerce").dt.strftime("%d/%m")
+    tipo = cached_read_sql(conn, """
+    SELECT tipo, COALESCE(SUM(valor), 0) AS valor
+    FROM lancamentos
+    WHERE data BETWEEN ? AND ?
+    GROUP BY tipo
+    ORDER BY valor DESC
+    """, (start_sql, end_sql))
+    top = cached_read_sql(conn, """
+    SELECT descricao, COALESCE(SUM(valor), 0) AS valor, COUNT(id) AS quantidade
+    FROM lancamentos
+    WHERE data BETWEEN ? AND ?
+    GROUP BY descricao
+    ORDER BY valor DESC
+    LIMIT 10
+    """, (start_sql, end_sql))
 
     col1, col2 = st.columns(2)
     with col1:
