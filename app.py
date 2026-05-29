@@ -6,6 +6,7 @@ from database.database import (
     DatabaseConfigError,
     database_mode_label,
     init_db,
+    initialize_database,
     is_database_url_configured,
 )
 from utils.backup import run_daily_auto_backup
@@ -35,7 +36,18 @@ st.set_page_config(
 
 apply_style()
 
+
+@st.cache_resource(show_spinner=False)
+def ensure_database_initialized():
+    migration_conn = init_db()
+    try:
+        initialize_database(migration_conn)
+    finally:
+        migration_conn.close()
+
+
 try:
+    ensure_database_initialized()
     conn = init_db()
 except DatabaseConfigError as error:
     st.error(str(error))
