@@ -1,6 +1,6 @@
+import os
 import sqlite3
 from pathlib import Path
-import os
 
 
 class DatabaseConfigError(RuntimeError):
@@ -106,6 +106,15 @@ def _postgres_query(query):
 
 
 def init_db(db_path="banco.db"):
+    try:
+        import streamlit as st
+
+        return _init_db_cached(db_path)
+    except RuntimeError:
+        return _init_db_uncached(db_path)
+
+
+def _init_db_uncached(db_path="banco.db"):
     database_url = _get_database_url()
 
     if database_url:
@@ -320,13 +329,29 @@ def init_db(db_path="banco.db"):
     return conn
 
 
+try:
+    import streamlit as st
+
+    _init_db_cached = st.cache_resource(show_spinner=False)(_init_db_uncached)
+except Exception:
+    _init_db_cached = _init_db_uncached
+
+
 def init_postgres_db(database_url):
     import psycopg2
 
+    connect_options = {
+        "connect_timeout": 10,
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    }
+
     if "sslmode=" in database_url:
-        raw_conn = psycopg2.connect(database_url)
+        raw_conn = psycopg2.connect(database_url, **connect_options)
     else:
-        raw_conn = psycopg2.connect(database_url, sslmode="require")
+        raw_conn = psycopg2.connect(database_url, sslmode="require", **connect_options)
     conn = PostgresConnection(raw_conn)
     cursor = conn.cursor()
 
@@ -500,6 +525,7 @@ def init_postgres_db(database_url):
     _add_postgres_column_if_missing(cursor, "lancamentos", "quantidade", "DOUBLE PRECISION")
     _add_postgres_column_if_missing(cursor, "lancamentos", "venda_id", "INTEGER")
     _add_postgres_column_if_missing(cursor, "lancamentos", "venda_item_id", "INTEGER")
+    _ensure_postgres_indexes(cursor)
     conn.commit()
     return conn
 
@@ -528,3 +554,21 @@ def _add_column_if_missing(cursor, table, column, column_type):
 
 def _add_postgres_column_if_missing(cursor, table, column, column_type):
     cursor.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {column_type}")
+
+
+def _ensure_postgres_indexes(cursor):
+    for query in [
+        "CREATE INDEX IF NOT EXISTS idx_lancamentos_data ON lancamentos(data)",
+        "CREATE INDEX IF NOT EXISTS idx_lancamentos_tipo ON lancamentos(tipo)",
+        "CREATE INDEX IF NOT EXISTS idx_pagamentos_lancamento_id ON pagamentos(lancamento_id)",
+        "CREATE INDEX IF NOT EXISTS idx_despesas_data ON despesas(data)",
+        "CREATE INDEX IF NOT EXISTS idx_caixa_data ON caixa(data)",
+        "CREATE INDEX IF NOT EXISTS idx_ordens_servico_cliente_id ON ordens_servico(cliente_id)",
+        "CREATE INDEX IF NOT EXISTS idx_ordens_servico_cpf ON ordens_servico(cpf)",
+        "CREATE INDEX IF NOT EXISTS idx_ordens_servico_telefone ON ordens_servico(telefone)",
+        "CREATE INDEX IF NOT EXISTS idx_ordens_servico_status ON ordens_servico(status)",
+        "CREATE INDEX IF NOT EXISTS idx_estoque_ativo ON estoque(ativo)",
+        "CREATE INDEX IF NOT EXISTS idx_clientes_ativo ON clientes(ativo)",
+        "CREATE INDEX IF NOT EXISTS idx_usuarios_usuario ON usuarios(usuario)",
+    ]:
+        cursor.execute(query)
